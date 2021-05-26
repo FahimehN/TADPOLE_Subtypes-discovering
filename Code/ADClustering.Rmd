@@ -1,0 +1,401 @@
+---
+title: "ADPredict"
+author: "Fahimeh"
+date: "13/10/2019"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Cluster Analyzis of AD
+
+
+```{r}
+library(FRESA.CAD)
+library(Rtsne)
+library(clValid)
+library(mclust)
+library(EMCluster)
+library(dendextend)
+library(NMF)
+library("readxl")
+
+```
+
+
+```{r}
+originaldata <- read_excel("C:/Semesters/Alzheimer's Paper/Dataset/TadClean.xlsx")
+class(originaldata$RID)
+#originaldata <- read.csv("C:/Semesters/Alzheimer's Paper/Dataset/TADPOLE_D1_D2.csv",na.strings="NA,-4" ) 
+
+BaselineData <- subset(originaldata, VISCODE == 'bl'& (DX_bl == "LMCI" | DX_bl == "EMCI")) 
+
+baseSubset <- BaselineData[,c("RID","DXCHANGE","DX_bl","PTGENDER","AGE_BL"
+                            ,"PTRACCAT","PTMARRY","ICV",
+                          "PTEDUCAT","APOE4","Entorhinal","Ventricles","MidTemp",
+                          "ConvNLtoMCI","ConvNLtoAD","ConvMCItoAD","Hippocampus",
+                          "CDRSB","ADAS11","ADAS13","MMSE","RAVLT_immediate",
+                          "RAVLT_learning","RAVLT_forgetting",
+                          "RAVLT_perc_forgetting","FAQ")]
+
+
+
+data <- na.omit(baseSubset)
+rownames(data) <- data$RID
+
+data$DX_bl[data$DX_bl== "EMCI"] <- 0
+data$DX_bl[data$DX_bl== "LMCI"] <- 1
+data$DX_bl <- as.numeric(data$DX_bl)
+
+#data$PTGENDER <- 1*(data$PTGENDER == "Female")
+
+data$PTGENDER[data$PTGENDER== "Male"] <- 0
+data$PTGENDER[data$PTGENDER== "Female"] <- 1
+data$PTGENDER <- as.numeric(data$PTGENDER)
+
+data$PTRACCAT[data$PTRACCAT == "Am Indian/Alaskan"] <- 0
+data$PTRACCAT[data$PTRACCAT == "Asian"] <- 1
+data$PTRACCAT[data$PTRACCAT == "Black"] <- 2
+data$PTRACCAT[data$PTRACCAT == "Hawaiian/Other PI"] <- 3
+data$PTRACCAT[data$PTRACCAT == "More than one"] <- 4
+data$PTRACCAT[data$PTRACCAT == "Unknown"] <- 5
+data$PTRACCAT[data$PTRACCAT == "White"] <- 6
+data$PTRACCAT <- as.numeric(data$PTRACCAT)
+
+data$PTMARRY[data$PTMARRY == "Divorced"] <- 0
+data$PTMARRY[data$PTMARRY == "Married"] <- 1
+data$PTMARRY[data$PTMARRY == "Never married"] <- 2
+data$PTMARRY[data$PTMARRY == "Unknown"] <- 3
+data$PTMARRY[data$PTMARRY == "Widowed"] <- 4
+data$PTMARRY <- as.numeric(data$PTMARRY)
+
+
+dataScaled <- scale(data[,!(colnames(data) %in% c("RID","DXCHANGE","DX_bl","PTGENDER","PTRACCAT","PTMARRY","PTEDUCAT","APOE4","ConvNLtoMCI","ConvNLtoAD","ConvMCItoAD"))])
+rownames(dataScaled) <- data$RID
+
+dataScaled <- as.data.frame(dataScaled)
+
+tsne <- Rtsne(unique(dataScaled), dims = 2, perplexity=40, verbose=TRUE, max_iter = 500)
+
+datatest <- as.data.frame(tsne$Y)
+rownames(datatest) <- data$RID
+
+table(data$DXCHANGE)
+table(data$DX_bl) #EMCI & LMCI
+
+EMCI_data <- subset(data,DX_bl==0)
+LMCI_data <- subset(data,DX_bl==1)
+
+# t-test (computing p-value)
+
+stats::t.test(EMCI_data$AGE_BL,LMCI_data$AGE_BL)
+stats::t.test(EMCI_data$PTEDUCAT,LMCI_data$PTEDUCAT)
+stats::t.test(EMCI_data$MMSE,LMCI_data$MMSE)
+stats::t.test(EMCI_data$ADAS13,LMCI_data$ADAS13)
+stats::t.test(EMCI_data$ADAS11,LMCI_data$ADAS11)
+stats::t.test(EMCI_data$CDRSB,LMCI_data$CDRSB)
+stats::t.test(EMCI_data$RAVLT_immediate,LMCI_data$RAVLT_immediate)
+stats::t.test(EMCI_data$RAVLT_learning,LMCI_data$RAVLT_learning)
+stats::t.test(EMCI_data$RAVLT_forgetting,LMCI_data$RAVLT_forgetting)
+stats::t.test(EMCI_data$RAVLT_perc_forgetting,LMCI_data$RAVLT_perc_forgetting)
+stats::t.test(EMCI_data$FAQ,LMCI_data$FAQ)
+stats::t.test(EMCI_data$Entorhinal,LMCI_data$Entorhinal)
+stats::t.test(EMCI_data$Hippocampus,LMCI_data$Hippocampus)
+stats::t.test(EMCI_data$MidTemp,LMCI_data$MidTemp)
+stats::t.test(EMCI_data$Ventricles,LMCI_data$Ventricles)
+stats::t.test(EMCI_data$ICV,LMCI_data$ICV)
+
+### chi-square test
+
+Data1 <- as.data.frame(cbind(EMCI_data, class=1))
+Data2 <- as.data.frame(cbind(LMCI_data, class=2))
+Data <- rbind(Data1,Data2) 
+
+tbl_sex = table(Data$PTGENDER ,Data$class)
+print(chisq.test(tbl_sex))
+
+tbl_APOE = table(Data$APOE4 ,Data$class)
+print(chisq.test(tbl_APOE))
+
+tbl_mcitoAD = table(Data$ConvMCItoAD ,Data$class)
+print(chisq.test(tbl_mcitoAD))
+
+
+```
+
+
+```{r}
+
+tcs2 <- clusterStability(data=datatest, clustermethod=Mclust, randomTests = 10, trainFraction = 0.7,G=2)
+tcs3 <- clusterStability(data=datatest, clustermethod=Mclust, randomTests = 100, trainFraction = 0.7,G=3)
+tcs4 <- clusterStability(data=datatest, clustermethod=Mclust, randomTests = 100, trainFraction = 0.7,G=4)
+tcs5 <- clusterStability(data=datatest, clustermethod=Mclust, randomTests = 100, trainFraction = 0.7,G=5)
+tcs6 <- clusterStability(data=datatest, clustermethod=Mclust, randomTests = 100, trainFraction = 0.7,G=6)
+
+summary(tcs6)
+
+save(tcs6,file="D:/Fahimeh-SecondSemester/Dataset/ADClustering.RDATA")
+load(file="D:/Fahimeh-SecondSemester/Dataset/ADClustering.RDATA")
+
+
+hplot <- gplots::heatmap.2(as.matrix(tcs6$testConsesus),trace="none",main="Data Results: Two Clusters")
+tcs2$averageNumberofClusters
+table(clab <- getConsensusCluster(tcs6,who = "testing"))
+hplot <- gplots::heatmap.2(as.matrix(tcs6$dataConcensus),trace="none",main="Data Results: Six Clusters")
+hm <- gplots::heatmap.2(as.matrix(tcs2$concensusMat),trace="none")
+clab <- getConsensusCluster(tcs2)
+#table(clab)
+#wncs3$pac
+
+
+clab <- getConsensusCluster(tcs2)
+#names(clab) <- data$RID
+
+
+ids<- data$RID
+
+id <- ids[1]
+lastpt <- NULL;
+for (id in ids)
+{
+  stp <- subset(originaldata,RID == id)
+  if (nrow(stp) > 1)
+  {
+    stp <- stp[order(stp$Years_bl),]
+    for (i in 2:nrow(stp))
+    {
+      if (is.na(stp$DXCHANGE[i]) && !is.na(stp$DXCHANGE[i-1]))
+      {
+        stp$DXCHANGE[i] <- stp$DXCHANGE[i-1];
+      }
+    }
+  }
+  lastpt <- rbind(lastpt,stp[which.max(stp$Years_bl),]);
+}
+
+rownames(lastpt) <- ids
+
+table(lastpt$DX,lastpt$DX_bl)
+table(lastpt$DXCHANGE,lastpt$DX_bl)
+lastTPDx <- 1*(lastpt$DXCHANGE == 7 | lastpt$DXCHANGE == 1) + 2*(lastpt$DXCHANGE == 2 | lastpt$DXCHANGE == 4 | lastpt$DXCHANGE == 8) + 3*(lastpt$DXCHANGE == 3 | lastpt$DXCHANGE == 5)
+names(lastTPDx) <- rownames(lastpt)
+
+CN_CASES <- subset(lastpt,lastTPDx == 1);
+MCI_CASES <- subset(lastpt,lastTPDx == 2);
+AD_CASES <- subset(lastpt,lastTPDx == 3);
+
+table(lastTPDx)
+
+ds <- AD_CASES$RID
+conversionPoint <- NULL;
+
+id <- ds[1]
+for (id in ds)
+{
+  stp <- subset(originaldata,RID == id)
+  conversionPoint <- rbind(conversionPoint,stp[stp$FULL_DX == "MCI to Dementia" | stp$FULL_DX == "Dementia",][1,1:100]);
+}
+
+rownames(conversionPoint) <- ds
+
+ADtime <- as.data.frame(cbind(event=rep(1,nrow(conversionPoint)), time = conversionPoint$Years_bl,class=clab[as.character(ds)],data[as.character(ds),!(colnames(data) %in% c("RID","DXCHANGE","DX_bl","PTGENDER","PTRACCAT","PTMARRY","ConvNLtoMCI","ConvNLtoAD","ConvMCItoAD"))]))
+
+
+# extract the number NC , MCI and AD of each cluster
+
+CNclass <- clab[as.character(CN_CASES$RID)]
+MCIclass <- clab[as.character(MCI_CASES$RID)]
+ADclass <- clab[as.character(AD_CASES$RID)]
+
+CN <- numeric()
+MCI <- numeric()
+AD <- numeric()
+
+for(i in 1:length(unique(clab)))
+{
+  CN <- cbind(CN , length(CNclass[CNclass == i]))
+  MCI <- cbind(MCI , length(MCIclass[MCIclass == i]))
+  AD <- cbind(AD , length(ADclass[ADclass == i]))
+}
+
+
+
+#Standard Error -----> MSE
+
+library(psych)
+
+#describe(data[ds,]$Hippocampus)
+describe(ADtime[ADtime$class == 1,]$Hippocampus)
+describe(ADtime[ADtime$class == 2,]$Hippocampus)
+describe(ADtime[ADtime$class == 3,]$Hippocampus)
+describe(ADtime[ADtime$class == 4,]$Hippocampus)
+describe(ADtime[ADtime$class == 5,]$Hippocampus)
+describe(ADtime[ADtime$class == 6,]$Hippocampus)
+
+#describe(data[ds,]$Entorhinal)
+describe(ADtime[ADtime$class == 1,]$Entorhinal)
+describe(ADtime[ADtime$class == 2,]$Entorhinal)
+describe(ADtime[ADtime$class == 3,]$Entorhinal)
+describe(ADtime[ADtime$class == 4,]$Entorhinal)
+describe(ADtime[ADtime$class == 5,]$Entorhinal)
+describe(ADtime[ADtime$class == 6,]$Entorhinal)
+
+#describe(data[ds,]$ICV)
+describe(ADtime[ADtime$class == 1,]$ICV)
+describe(ADtime[ADtime$class == 2,]$ICV)
+describe(ADtime[ADtime$class == 3,]$ICV)
+describe(ADtime[ADtime$class == 4,]$ICV)
+describe(ADtime[ADtime$class == 5,]$ICV)
+describe(ADtime[ADtime$class == 6,]$ICV)
+
+#describe(data[ds,]$Ventricles)
+describe(ADtime[ADtime$class == 1,]$Ventricles)
+describe(ADtime[ADtime$class == 2,]$Ventricles)
+describe(ADtime[ADtime$class == 3,]$Ventricles)
+describe(ADtime[ADtime$class == 4,]$Ventricles)
+describe(ADtime[ADtime$class == 5,]$Ventricles)
+describe(ADtime[ADtime$class == 6,]$Ventricles)
+
+#describe(data[ds,]$MidTemp)
+describe(ADtime[ADtime$class == 1,]$MidTemp)
+describe(ADtime[ADtime$class == 2,]$MidTemp)
+describe(ADtime[ADtime$class == 3,]$MidTemp)
+describe(ADtime[ADtime$class == 4,]$MidTemp)
+describe(ADtime[ADtime$class == 5,]$MidTemp)
+describe(ADtime[ADtime$class == 6,]$MidTemp)
+
+#describe(data[ds,]$CDRSB)
+describe(ADtime[ADtime$class == 1,]$CDRSB)
+describe(ADtime[ADtime$class == 2,]$CDRSB)
+describe(ADtime[ADtime$class == 3,]$CDRSB)
+describe(ADtime[ADtime$class == 4,]$CDRSB)
+describe(ADtime[ADtime$class == 5,]$CDRSB)
+describe(ADtime[ADtime$class == 6,]$CDRSB)
+
+#describe(data[ds,]$MMSE)
+describe(ADtime[ADtime$class == 1,]$MMSE)
+describe(ADtime[ADtime$class == 2,]$MMSE)
+describe(ADtime[ADtime$class == 3,]$MMSE)
+describe(ADtime[ADtime$class == 4,]$MMSE)
+describe(ADtime[ADtime$class == 5,]$MMSE)
+describe(ADtime[ADtime$class == 6,]$MMSE)
+
+#describe(data[ds,]$ADAS13)
+describe(ADtime[ADtime$class == 1,]$ADAS13)
+describe(ADtime[ADtime$class == 2,]$ADAS13)
+describe(ADtime[ADtime$class == 3,]$ADAS13)
+describe(ADtime[ADtime$class == 4,]$ADAS13)
+describe(ADtime[ADtime$class == 5,]$ADAS13)
+describe(ADtime[ADtime$class == 6,]$ADAS13)
+
+#describe(data[ds,]$ADAS11)
+describe(ADtime[ADtime$class == 1,]$ADAS11)
+describe(ADtime[ADtime$class == 2,]$ADAS11)
+describe(ADtime[ADtime$class == 3,]$ADAS11)
+describe(ADtime[ADtime$class == 4,]$ADAS11)
+describe(ADtime[ADtime$class == 5,]$ADAS11)
+describe(ADtime[ADtime$class == 6,]$ADAS11)
+
+#describe(data[ds,]$RAVLT_immediate)
+describe(ADtime[ADtime$class == 1,]$RAVLT_immediate)
+describe(ADtime[ADtime$class == 2,]$RAVLT_immediate)
+describe(ADtime[ADtime$class == 3,]$RAVLT_immediate)
+describe(ADtime[ADtime$class == 4,]$RAVLT_immediate)
+describe(ADtime[ADtime$class == 5,]$RAVLT_immediate)
+describe(ADtime[ADtime$class == 6,]$RAVLT_immediate)
+
+#describe(data[ds,]$RAVLT_learning)
+describe(ADtime[ADtime$class == 1,]$RAVLT_learning)
+describe(ADtime[ADtime$class == 2,]$RAVLT_learning)
+describe(ADtime[ADtime$class == 3,]$RAVLT_learning)
+describe(ADtime[ADtime$class == 4,]$RAVLT_learning)
+describe(ADtime[ADtime$class == 5,]$RAVLT_learning)
+describe(ADtime[ADtime$class == 6,]$RAVLT_learning)
+
+#describe(data[ds,]$FAQ)
+describe(ADtime[ADtime$class == 1,]$FAQ)
+describe(ADtime[ADtime$class == 2,]$FAQ)
+describe(ADtime[ADtime$class == 3,]$FAQ)
+describe(ADtime[ADtime$class == 4,]$FAQ)
+describe(ADtime[ADtime$class == 5,]$FAQ)
+describe(ADtime[ADtime$class == 6,]$FAQ)
+
+#describe(data[ds,]$RAVLT_perc_forgetting)
+describe(ADtime[ADtime$class == 1,]$RAVLT_perc_forgetting)
+describe(ADtime[ADtime$class == 2,]$RAVLT_perc_forgetting)
+describe(ADtime[ADtime$class == 3,]$RAVLT_perc_forgetting)
+describe(ADtime[ADtime$class == 4,]$RAVLT_perc_forgetting)
+describe(ADtime[ADtime$class == 5,]$RAVLT_perc_forgetting)
+describe(ADtime[ADtime$class == 6,]$RAVLT_perc_forgetting)
+
+#describe(data[ds,]$RAVLT_forgetting)
+describe(ADtime[ADtime$class == 1,]$RAVLT_forgetting)
+describe(ADtime[ADtime$class == 2,]$RAVLT_forgetting)
+describe(ADtime[ADtime$class == 3,]$RAVLT_forgetting)
+describe(ADtime[ADtime$class == 4,]$RAVLT_forgetting)
+describe(ADtime[ADtime$class == 5,]$RAVLT_forgetting)
+describe(ADtime[ADtime$class == 6,]$RAVLT_forgetting)
+
+#describe(data[ds,]$AGE_BL)
+describe(ADtime[ADtime$class == 1,]$AGE_BL)
+describe(ADtime[ADtime$class == 2,]$AGE_BL)
+describe(ADtime[ADtime$class == 3,]$AGE_BL)
+describe(ADtime[ADtime$class == 4,]$AGE_BL)
+describe(ADtime[ADtime$class == 5,]$AGE_BL)
+describe(ADtime[ADtime$class == 6,]$AGE_BL)
+
+#describe(data[ds,]$PTEDUCAT)
+describe(ADtime[ADtime$class == 1,]$PTEDUCAT)
+describe(ADtime[ADtime$class == 2,]$PTEDUCAT)
+describe(ADtime[ADtime$class == 3,]$PTEDUCAT)
+describe(ADtime[ADtime$class == 4,]$PTEDUCAT)
+describe(ADtime[ADtime$class == 5,]$PTEDUCAT)
+describe(ADtime[ADtime$class == 6,]$PTEDUCAT)
+
+#describe(data[ds,]$APOE4)
+describe(ADtime[ADtime$class == 1,]$APOE4)
+describe(ADtime[ADtime$class == 2,]$APOE4)
+describe(ADtime[ADtime$class == 3,]$APOE4)
+describe(ADtime[ADtime$class == 4,]$APOE4)
+describe(ADtime[ADtime$class == 5,]$APOE4)
+describe(ADtime[ADtime$class == 6,]$APOE4)
+
+
+describe(ADtime[ADtime$class == 1,]$time)
+describe(ADtime[ADtime$class == 2,]$time)
+describe(ADtime[ADtime$class == 3,]$time)
+describe(ADtime[ADtime$class == 4,]$time)
+describe(ADtime[ADtime$class == 5,]$time)
+describe(ADtime[ADtime$class == 6,]$time)
+
+
+#ADtime[ADtime$class == 1,]
+
+    
+### Plotting with survival package
+
+library(ggfortify)
+library(survival)
+ADtime <- as.data.frame(ADtime)
+survivalDataMCIandNC <- as.data.frame(survivalDataMCIandNC)
+
+survivalDataMCIandNC$Event <- 1
+
+fit <- survfit(Surv(time, event ) ~ class , data = ADtime)
+autoplot(fit)
+
+fit1 <- survfit(Surv(timeToEvent, Event) ~ Class , data = survivalDataMCIandNC)
+autoplot(fit1)
+
+
+autoplot(fit, surv.linetype = 'dashed', conf.int = FALSE,
+         censor.shape = '*', censor.size = 5, facets = TRUE, ncol = 2)
+
+autoplot(survfit(Surv(timeToEvent, Event) ~ 2, data = survivalDataMCIandNC), surv.colour = 'blue', censor.colour = 'red')
+
+```
+

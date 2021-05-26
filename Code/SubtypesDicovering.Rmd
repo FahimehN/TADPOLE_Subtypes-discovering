@@ -1,0 +1,939 @@
+---
+title: "tsneTraining"
+author: "Fahimeh"
+date: "28/10/2019"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(FRESA.CAD)
+library(Rtsne)
+library(clValid)
+library(mclust)
+library(EMCluster)
+library(dendextend)
+
+```
+
+
+```{r}
+#originaldata <- read_excel("C:/Semesters/Alzheimer's Paper/Dataset/TadClean.xlsx")
+originaldata <- read.csv("C:/Semesters/Alzheimer's Paper/Dataset/TADPOLE_D1_D2.csv",na.strings="NA,-4" ) 
+
+load("C:/Semesters/Alzheimer's Paper/Dataset/trainMclust.RDATA")
+load("C:/Semesters/Alzheimer's Paper/Dataset/TestMclust.RDATA")
+
+
+BaselineData <- subset(originaldata, VISCODE == 'bl'& (DX_bl == "LMCI" | DX_bl == "EMCI")) 
+
+baseSubset <- BaselineData[,c("RID","DXCHANGE","DX_bl","PTGENDER","AGE",#"PTEDUCAT",
+                          "PTRACCAT","PTMARRY","ICV","PTEDUCAT","APOE4","Entorhinal",
+                        "Ventricles","MidTemp","Hippocampus","CDRSB","ADAS11","ADAS13","MMSE",
+                          "RAVLT_immediate","RAVLT_learning","RAVLT_forgetting",
+                          "RAVLT_perc_forgetting","FAQ")]
+
+
+
+data <- na.omit(baseSubset)
+Vdata <- na.omit(baseSubset)
+rownames(data) <- data$RID
+
+#data$DX_bl[data$DX_bl== "EMCI"] <- 0
+#data$DX_bl[data$DX_bl== "LMCI"] <- 1
+data$DX_bl <- as.numeric(data$DX_bl)
+
+# data$PTGENDER[data$PTGENDER== "Male"] <- 0
+# data$PTGENDER[data$PTGENDER== "Female"] <- 1
+data$PTGENDER <- as.numeric(data$PTGENDER)
+
+# data$PTRACCAT[data$PTRACCAT == "Am Indian/Alaskan"] <- 0
+# data$PTRACCAT[data$PTRACCAT == "Asian"] <- 1
+# data$PTRACCAT[data$PTRACCAT == "Black"] <- 2
+# data$PTRACCAT[data$PTRACCAT == "Hawaiian/Other PI"] <- 3
+# data$PTRACCAT[data$PTRACCAT == "More than one"] <- 4
+# data$PTRACCAT[data$PTRACCAT == "Unknown"] <- 5
+# data$PTRACCAT[data$PTRACCAT == "White"] <- 6
+data$PTRACCAT <- as.numeric(data$PTRACCAT)
+
+# data$PTMARRY[data$PTMARRY == "Divorced"] <- 0
+# data$PTMARRY[data$PTMARRY == "Married"] <- 1
+# data$PTMARRY[data$PTMARRY == "Never married"] <- 2
+# data$PTMARRY[data$PTMARRY == "Unknown"] <- 3
+# data$PTMARRY[data$PTMARRY == "Widowed"] <- 4
+data$PTMARRY <- as.numeric(data$PTMARRY)
+
+pdata <- data
+
+dataScaled <- FRESAScale(data[,!(colnames(data) %in% c("RID","DXCHANGE","DX_bl","PTGENDER","PTRACCAT","PTMARRY","PTEDUCAT","APOE4"))],method="Order")$scaledData
+
+# dataScaled <- scale(data[,!(colnames(data) %in% c("DXCHANGE","DX_bl","PTGENDER","PTRACCAT","PTMARRY","PTEDUCAT","APOE4","ConvNLtoMCI","ConvNLtoAD","ConvMCItoAD"))])
+
+##### Select 5 top fearure for nmf cluster ####
+
+dataScaled <- as.data.frame(dataScaled)
+Tdata <- cbind(dataScaled,data[,"DX_bl"])
+colnames(Tdata)[colnames(Tdata)=="data[, \"DX_bl\"]"] <- "DX_bl"
+
+ topFeat <- univariate_Logit(data=Tdata, Outcome="DX_bl", pvalue=0.05, adjustMethod="BH",uniTest="zIDI",limit=0.008)
+ dataRed <- Tdata[,names(topFeat)]
+ 
+dataRed <- dataScaled[,c("Hippocampus","ADAS11","MMSE","RAVLT_immediate","RAVLT_learning" )]
+ 
+minClnm <- apply(dataRed, 2,min)
+TnmfData <- dataRed
+
+TnmfData[, "Hippocampus"] <- TnmfData[, "Hippocampus"] + 3
+TnmfData[, "ADAS11"] <- TnmfData[, "ADAS11"] + 2
+TnmfData[, "RAVLT_immediate"] <- TnmfData[, "RAVLT_immediate"] + 2
+TnmfData[, "RAVLT_learning"] <- TnmfData[, "RAVLT_learning"] + 2
+
+############ PCA For Mclust clustering #########
+
+rownames(dataScaled) <- data$RID
+
+dataScaled <- as.data.frame(dataScaled)
+
+pcadata <- prcomp(dataScaled,rank. = 3)$x
+
+###########  NMF DATA  #########
+Wdata <- data[,!(colnames(data) %in% c("RID","DXCHANGE","DX_bl","PTGENDER","PTRACCAT","PTMARRY","PTEDUCAT","APOE4"))]
+
+minClnm <- apply(Wdata, 2,min)
+nmfData <- Wdata
+
+nmfData[, "RAVLT_learning"] <- nmfData[, "RAVLT_learning"] + 1
+nmfData[, "RAVLT_forgetting"] <- nmfData[, "RAVLT_forgetting"] + 4
+nmfData[, "RAVLT_perc_forgetting"] <- nmfData[, "RAVLT_perc_forgetting"] + 37
+
+
+```
+
+```{r}
+###################### Mclust ##################
+
+randomSamples <- sample(nrow(dataScaled),0.7*nrow(dataScaled))
+
+traindata <- as.data.frame(dataScaled[randomSamples,])
+
+pcatraindata <- prcomp(traindata,rank. = 3)
+
+pcaTestdata <- predict(pcatraindata,dataScaled[-randomSamples,])
+
+
+mod1 <- Mclust(pcatraindata$x,G=3)
+#save(mod1,file="D:/Fahimeh-SecondSemester/Dataset/trainMclust.RDATA")
+load(file="C:/Users/fneja/OneDrive/Documents/EvalCluster/R/Dataset/trainMclust.RDATA")
+
+clusterLabels <- predict(mod1,pcaTestdata)
+#save(clusterLabels,file="D:/Fahimeh-SecondSemester/Dataset/TestMclust.RDATA")
+load(file="C:/Users/fneja/OneDrive/Documents/EvalCluster/R/Dataset/TestMclust.RDATA")
+
+
+names(clusterLabels$classification) <- rownames(dataScaled[-randomSamples,])
+names(mod1$classification) <- rownames(dataScaled[randomSamples,])
+
+
+###################### NMF ##################
+
+randomSamples <- sample(nrow(TnmfData),0.7*nrow(TnmfData))
+
+traindata <- as.data.frame(TnmfData[randomSamples,])
+
+testdata <- as.data.frame(TnmfData[-randomSamples,])
+
+
+nmfcls <- nmfCluster(traindata,rank=3)
+#save(nmfcls,file="D:/Fahimeh-SecondSemester/Dataset/trainNMF.RDATA")
+load(file="C:/Users/fneja/OneDrive/Documents/EvalCluster/R/Dataset/trainNMF.RDATA")
+
+clusterLabels <- predict(nmfcls,testdata)
+#save(clusterLabels,file="D:/Fahimeh-SecondSemester/Dataset/TestNMF.RDATA")
+load(file="D:/Fahimeh-SecondSemester/Dataset/TestNMF.RDATA")
+
+
+names(clusterLabels$classification) <- rownames(TnmfData[-randomSamples,])
+names(nmfcls$classification) <- rownames(TnmfData[randomSamples,])
+
+  
+
+cs2 <- clusterStability(data=pcadata, clustermethod=Mclust, randomTests = 100, trainFraction = 0.7,G=2)
+save(cs2,file="D:/Fahimeh-SecondSemester/Dataset/cs2.RDATA")
+#load(file="D:/Fahimeh-SecondSemester/Dataset/cs2.RDATA")
+
+cs3 <- clusterStability(data=pcadata, clustermethod=Mclust, randomTests = 100, trainFraction = 0.7,G=3)
+save(cs3,file="D:/Fahimeh-SecondSemester/Dataset/cs3.RDATA")
+#load(file="D:/Fahimeh-SecondSemester/Dataset/cs3.RDATA")
+
+cs4 <- clusterStability(data=pcadata, clustermethod=Mclust, randomTests = 100, trainFraction = 0.7,G=4)
+save(cs4,file="D:/Fahimeh-SecondSemester/Dataset/cs4.RDATA")
+load(file="D:/Fahimeh-SecondSemester/Dataset/cs4.RDATA")
+
+cs5 <- clusterStability(data=pcadata, clustermethod=Mclust, randomTests = 100, trainFraction = 0.7,G=5)
+save(cs5,file="D:/Fahimeh-SecondSemester/Dataset/cs5.RDATA")
+#load(file="D:/Fahimeh-SecondSemester/Dataset/cs5.RDATA")
+
+cs6 <- clusterStability(data=pcadata, clustermethod=Mclust, randomTests = 100, trainFraction = 0.7,G=6)
+save(cs6,file="D:/Fahimeh-SecondSemester/Dataset/cs6.RDATA")
+#load(file="D:/Fahimeh-SecondSemester/Dataset/cs5.RDATA")
+
+
+############### NMF ##################
+
+# ncs2 <- clusterStability(data=nmfData, clustermethod=nmfCluster, randomTests = 100, trainFraction = 0.7,rank=2)
+# save(ncs2,file="D:/Fahimeh-SecondSemester/Dataset/ncs2.RDATA")
+# #load(file="D:/Fahimeh-SecondSemester/Dataset/ncs2.RDATA")
+# 
+# ncs3 <- clusterStability(data=nmfData, clustermethod=nmfCluster, randomTests = 100, trainFraction = 0.7,rank=3)
+# save(ncs3,file="D:/Fahimeh-SecondSemester/Dataset/ncs3.RDATA")
+# #load(file="D:/Fahimeh-SecondSemester/Dataset/ncs3.RDATA")
+# 
+# ncs4 <- clusterStability(data=nmfData, clustermethod=nmfCluster, randomTests = 100, trainFraction = 0.7,rank=4)
+# save(ncs4,file="D:/Fahimeh-SecondSemester/Dataset/ncs4.RDATA")
+# #load(file="D:/Fahimeh-SecondSemester/Dataset/ncs4.RDATA")
+# 
+# ncs5 <- clusterStability(data=nmfData, clustermethod=nmfCluster, randomTests = 100, trainFraction = 0.7,rank=5)
+# save(ncs5,file="D:/Fahimeh-SecondSemester/Dataset/ncs5.RDATA")
+# load(file="D:/Fahimeh-SecondSemester/Dataset/ncs5.RDATA")
+# 
+# ncs6 <- clusterStability(data=nmfData, clustermethod=nmfCluster, randomTests = 100, trainFraction = 0.7,rank=6)
+# save(ncs6,file="D:/Fahimeh-SecondSemester/Dataset/ncs6.RDATA")
+# load(file="D:/Fahimeh-SecondSemester/Dataset/ncs6.RDATA")
+# 
+# 
+# 
+# tncs2 <- clusterStability(data=nmfData, clustermethod=nmfCluster, randomTests = 100, trainFraction = 0.7,rank=2)
+# save(tncs2,file="D:/Fahimeh-SecondSemester/Dataset/tncs2.RDATA")
+# #load(file="D:/Fahimeh-SecondSemester/Dataset/ncs2.RDATA")
+# 
+# tncs3 <- clusterStability(data=nmfData, clustermethod=nmfCluster, randomTests = 100, trainFraction = 0.7,rank=3)
+# save(tncs3,file="D:/Fahimeh-SecondSemester/Dataset/tncs3.RDATA")
+# #load(file="D:/Fahimeh-SecondSemester/Dataset/ncs3.RDATA")
+# 
+# tncs4 <- clusterStability(data=nmfData, clustermethod=nmfCluster, randomTests = 100, trainFraction = 0.7,rank=4)
+# save(tncs4,file="D:/Fahimeh-SecondSemester/Dataset/tncs4.RDATA")
+# #load(file="D:/Fahimeh-SecondSemester/Dataset/ncs4.RDATA")
+# 
+# tncs5 <- clusterStability(data=nmfData, clustermethod=nmfCluster, randomTests = 100, trainFraction = 0.7,rank=5)
+# save(tncs5,file="D:/Fahimeh-SecondSemester/Dataset/tncs5.RDATA")
+# #load(file="D:/Fahimeh-SecondSemester/Dataset/ncs5.RDATA")
+# 
+# tncs6 <- clusterStability(data=nmfData, clustermethod=nmfCluster, randomTests = 100, trainFraction = 0.7,rank=6)
+# save(tncs6,file="D:/Fahimeh-SecondSemester/Dataset/tncs6.RDATA")
+# #load(file="D:/Fahimeh-SecondSemester/Dataset/ncs6.RDATA")
+
+
+hplot <- gplots::heatmap.2(as.matrix(tncs6$testConsesus),trace="none",main="Test Results: Six Clusters")
+cs2$averageNumberofClusters
+table(clab <- getConsensusCluster(cs3,who = "testing"))
+hplot <- gplots::heatmap.2(as.matrix(tncs6$dataConcensus),trace="none",main="Data Results: Six Clusters")
+table(clab <- getConsensusCluster(cs2))
+table(clab <- getConsensusCluster(wncs2),data$DX_bl)
+hm <- gplots::heatmap.2(as.matrix(cs2$concensusMat),trace="none")
+clab <- getConsensusCluster(cs2)
+table(clab)
+wncs3$pac
+
+############### Training and Testing ####
+
+#clab <- nmfcls$classification
+clab <- clusterLabels$classification  ## Test
+clab <- mod1$classification  ## Train
+
+#ids <- as.numeric(rownames(data.frame(clab)))
+#ids<- data[randomSamples,]$RID 
+#ids<- data[-randomSamples,]$RID 
+
+ids <- as.numeric(names(clusterLabels$classification)) # Test
+ids <- as.numeric(names(mod1$classification)) # Train
+
+#ids <- data$RID
+id <- ids[1]
+lastpt <- NULL;
+for (id in ids)
+{
+  stp <- subset(originaldata,RID == id)
+  if (nrow(stp) > 1)
+  {
+    stp <- stp[order(stp$Years_bl),]
+    for (i in 2:nrow(stp))
+    {
+      if (is.na(stp$DXCHANGE[i]) && !is.na(stp$DXCHANGE[i-1]))
+      {
+        stp$DXCHANGE[i] <- stp$DXCHANGE[i-1];
+      }
+    }
+  }
+  lastpt <- rbind(lastpt,stp[which.max(stp$Years_bl),]);
+}
+
+rownames(lastpt) <- ids
+
+table(lastpt$DX,lastpt$DX_bl)
+table(lastpt$DXCHANGE,lastpt$DX_bl)
+lastTPDx <- 1*(lastpt$DXCHANGE == 7 | lastpt$DXCHANGE == 1) + 2*(lastpt$DXCHANGE == 2 | lastpt$DXCHANGE == 4 | lastpt$DXCHANGE == 8) + 3*(lastpt$DXCHANGE == 3 | lastpt$DXCHANGE == 5)
+names(lastTPDx) <- rownames(lastpt)
+
+CN_CASES <- subset(lastpt,lastTPDx == 1);
+MCI_CASES <- subset(lastpt,lastTPDx == 2);
+AD_CASES <- subset(lastpt,lastTPDx == 3);
+
+
+
+table(lastTPDx)
+
+ds <- lastpt$RID
+#ds <- MCI_CASES$RID
+#ds <- AD_CASES$RID
+conversionPoint <- NULL;
+
+id <- ds[1]
+for (id in ds)
+{
+  stp <- subset(originaldata,RID == id)
+  conversionPoint <- rbind(conversionPoint,stp[stp$DX == "MCI to Dementia" | stp$DX == "Dementia",][1,1:100]);
+}
+
+rownames(conversionPoint) <- ds
+
+ADtime <- as.data.frame(cbind(event=rep(1,nrow(conversionPoint)), time = conversionPoint$Years_bl,class=clab[as.character(ds)],data[as.character(ds),!(colnames(data) %in% c("RID","DXCHANGE","PTRACCAT","PTMARRY","ConvNLtoMCI","ConvNLtoAD","ConvMCItoAD"))]))
+
+
+# extract the number NC , MCI and AD of each cluster
+
+CNclass <- clab[as.character(CN_CASES$RID)]
+MCIclass <- clab[as.character(MCI_CASES$RID)]
+ADclass <- clab[as.character(AD_CASES$RID)]
+
+CN <- numeric()
+MCI <- numeric()
+AD <- numeric()
+
+for(i in 1:length(unique(clab)))
+{
+  CN <- cbind(CN , length(CNclass[CNclass == i]))
+  MCI <- cbind(MCI , length(MCIclass[MCIclass == i]))
+  AD <- cbind(AD , length(ADclass[ADclass == i]))
+}
+
+
+## Create labels for visualization
+
+lastTPDx<- as.character(lastTPDx)
+
+lastTPDx[lastTPDx == 1] <- "CN"
+lastTPDx[lastTPDx == 2] <- "MCI"
+lastTPDx[lastTPDx == 3] <- "AD"
+
+
+### Plotting with survival package
+
+library(ggfortify)
+library(survival)
+ADtime <- as.data.frame(ADtime)
+
+fit <- survfit(Surv(time, event ) ~ class , data = ADtime)
+autoplot(fit)
+
+tiff("test.tiff", units="in", width=5, height=5, res=600)
+# insert ggplot code
+autoplot(fit)
+dev.off()
+
+autoplot(fit, surv.linetype = 'dashed', conf.int = FALSE,
+         censor.shape = '*', censor.size = 5, facets = TRUE, ncol = 2)
+
+
+#diffAD_curve <- subset(ADtime, (class == 1 | class == 2))
+diffAD_curve <- subset(ADtime, ( class == 2)) #class == 3 |
+diffAD_curve <- as.data.frame(diffAD_curve)
+
+survdiff(Surv(time, event ) ~ class , data = diffAD_curve)
+
+
+############# visualization ##########
+
+           ############# t-SNE #########
+
+Labels<-clusterLabels$classification
+clusterLabels$classification <-as.factor(clusterLabels$classification)
+
+## for plotting
+colors = rainbow(length(unique(clusterLabels$classification)))
+names(colors) = unique(clusterLabels$classification)
+
+## Executing the algorithm on curated data
+
+Visualdata <- dataScaled[c(names(clusterLabels$classification)),]
+
+#tsne <- Rtsne(unique(TnmfData[-randomSamples,]), dims = 2, perplexity=30, verbose=TRUE, max_iter = 500)
+
+tsne <- Rtsne(unique(Visualdata), dims = 2, perplexity=40, verbose=TRUE, max_iter = 5000)
+
+## Plotting
+plot(as.data.frame(tsne$Y), t='p', main="t-sne NMF (Test) (K=3)",col=colors[as.numeric(as.factor(lastTPDx))])
+
+plot(tsne$Y, t='n',xlab = "tsneX",ylab = "tsneY", main="t-sne Mclust (Test)",col="darkgreen")
+text(as.data.frame(tsne$Y), labels=lastTPDx, col=colors[clusterLabels$classification])
+
+
+ ###### PCA ######
+
+Visualdata <- pcadata[c(names(clusterLabels$classification)),]
+
+plot(Visualdata[,1:2],xlab="PC1", ylab="PC2",col = clusterLabels$classification ,main="PCA Mclust (Test)");
+text(as.data.frame(Visualdata), labels=lastTPDx, col=colors[clusterLabels$classification])
+
+
+#Standard Error -----> MSE
+
+library(psych)
+
+
+describe(ADtime[ADtime$class == 1,]$time)
+describe(ADtime[ADtime$class == 2,]$time)
+describe(ADtime[ADtime$class == 3,]$time)
+
+
+#describe(data[ds,]$Hippocampus)
+describe(ADtime[ADtime$class == 1,]$Hippocampus)
+describe(ADtime[ADtime$class == 2,]$Hippocampus)
+describe(ADtime[ADtime$class == 3,]$Hippocampus)
+
+#describe(data[ds,]$Entorhinal)
+describe(ADtime[ADtime$class == 1,]$Entorhinal)
+describe(ADtime[ADtime$class == 2,]$Entorhinal)
+describe(ADtime[ADtime$class == 3,]$Entorhinal)
+
+
+#describe(data[ds,]$ICV)
+describe(ADtime[ADtime$class == 1,]$ICV)
+describe(ADtime[ADtime$class == 2,]$ICV)
+describe(ADtime[ADtime$class == 3,]$ICV)
+
+
+#describe(data[ds,]$Ventricles)
+describe(ADtime[ADtime$class == 1,]$Ventricles)
+describe(ADtime[ADtime$class == 2,]$Ventricles)
+describe(ADtime[ADtime$class == 3,]$Ventricles)
+
+#describe(data[ds,]$MidTemp)
+describe(ADtime[ADtime$class == 1,]$MidTemp)
+describe(ADtime[ADtime$class == 2,]$MidTemp)
+describe(ADtime[ADtime$class == 3,]$MidTemp)
+
+
+#describe(data[ds,]$CDRSB)
+describe(ADtime[ADtime$class == 1,]$CDRSB)
+describe(ADtime[ADtime$class == 2,]$CDRSB)
+describe(ADtime[ADtime$class == 3,]$CDRSB)
+
+
+#describe(data[ds,]$MMSE)
+describe(ADtime[ADtime$class == 1,]$MMSE)
+describe(ADtime[ADtime$class == 2,]$MMSE)
+describe(ADtime[ADtime$class == 3,]$MMSE)
+
+
+#describe(data[ds,]$ADAS13)
+describe(ADtime[ADtime$class == 1,]$ADAS13)
+describe(ADtime[ADtime$class == 2,]$ADAS13)
+describe(ADtime[ADtime$class == 3,]$ADAS13)
+
+
+#describe(data[ds,]$ADAS11)
+describe(ADtime[ADtime$class == 1,]$ADAS11)
+describe(ADtime[ADtime$class == 2,]$ADAS11)
+describe(ADtime[ADtime$class == 3,]$ADAS11)
+
+
+#describe(data[ds,]$RAVLT_immediate)
+describe(ADtime[ADtime$class == 1,]$RAVLT_immediate)
+describe(ADtime[ADtime$class == 2,]$RAVLT_immediate)
+describe(ADtime[ADtime$class == 3,]$RAVLT_immediate)
+
+
+#describe(data[ds,]$RAVLT_learning)
+describe(ADtime[ADtime$class == 1,]$RAVLT_learning)
+describe(ADtime[ADtime$class == 2,]$RAVLT_learning)
+describe(ADtime[ADtime$class == 3,]$RAVLT_learning)
+
+
+#describe(data[ds,]$FAQ)
+describe(ADtime[ADtime$class == 1,]$FAQ)
+describe(ADtime[ADtime$class == 2,]$FAQ)
+describe(ADtime[ADtime$class == 3,]$FAQ)
+
+#describe(data[ds,]$RAVLT_perc_forgetting)
+describe(ADtime[ADtime$class == 1,]$RAVLT_perc_forgetting)
+describe(ADtime[ADtime$class == 2,]$RAVLT_perc_forgetting)
+describe(ADtime[ADtime$class == 3,]$RAVLT_perc_forgetting)
+
+
+#describe(data[ds,]$RAVLT_forgetting)
+describe(ADtime[ADtime$class == 1,]$RAVLT_forgetting)
+describe(ADtime[ADtime$class == 2,]$RAVLT_forgetting)
+describe(ADtime[ADtime$class == 3,]$RAVLT_forgetting)
+
+
+#describe(data[ds,]$AGE_BL)
+describe(ADtime[ADtime$class == 1,]$AGE)
+describe(ADtime[ADtime$class == 2,]$AGE)
+describe(ADtime[ADtime$class == 3,]$AGE)
+
+#describe(data[ds,]$PTEDUCAT)
+describe(ADtime[ADtime$class == 1,]$PTEDUCAT)
+describe(ADtime[ADtime$class == 2,]$PTEDUCAT)
+describe(ADtime[ADtime$class == 3,]$PTEDUCAT)
+
+
+#describe(data[ds,]$APOE4)
+# describe(ADtime[ADtime$class == 1,]$APOE4)
+# describe(ADtime[ADtime$class == 2,]$APOE4)
+# describe(ADtime[ADtime$class == 3,]$APOE4)
+
+apoe40<- numeric()
+apoe41<- numeric()
+apoe42<- numeric()
+
+for(i in 1:3)
+{
+  z0 <- ADtime[ADtime$class == i,]$APOE4 == 0
+  apoe40 <- cbind(apoe40 , length(z0[z0 == TRUE]))
+  
+  z1 <- ADtime[ADtime$class == i,]$APOE4 == 1
+  apoe41 <- cbind(apoe41 , length(z1[z1 == TRUE]))
+  
+  z2 <- ADtime[ADtime$class == i,]$APOE4 == 2
+  apoe42 <- cbind(apoe42 , length(z2[z2 == TRUE]))
+}
+
+
+
+male <- numeric()
+female <- numeric()
+
+for(i in 1:3)
+{
+  MA <- ADtime[ADtime$class == i,]$PTGENDER == 1
+  male <- cbind(male , length(MA[MA == TRUE]))
+  
+  FE <- ADtime[ADtime$class == i,]$PTGENDER == 2
+  female <- cbind(female , length(FE[FE == TRUE]))
+}
+
+
+LMCI <- numeric()
+EMCI <- numeric()
+
+for(i in 1:3)
+{
+  L <- ADtime[ADtime$class == i,]$DX_bl == 4
+  LMCI <- cbind(LMCI , length(L[L == TRUE]))
+  
+  E <- ADtime[ADtime$class == i,]$DX_bl == 3
+  EMCI <- cbind(EMCI , length(E[E == TRUE]))
+}
+
+###### ANOVA Test #######
+
+class <- as.numeric(ADtime$class)
+
+aov_cont<- aov(class ~ ADtime$time)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$Hippocampus)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$Entorhinal)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$ICV)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$Ventricles)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$MidTemp)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$CDRSB)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$MMSE)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$ADAS13)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$ADAS11)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$RAVLT_immediate)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$RAVLT_learning)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$FAQ)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]    
+
+aov_cont<- aov(class ~ ADtime$RAVLT_perc_forgetting)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$RAVLT_forgetting)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+aov_cont<- aov(class ~ ADtime$AGE)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]  
+
+aov_cont<- aov(class ~ ADtime$PTEDUCAT)
+summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+
+############# chi-square test #########
+
+Achs_apoe4 <- chisq.test(ADclass ,ADtime$APOE4)
+Achs_gender <- chisq.test(ADclass ,ADtime$PTGENDER)
+
+
+Mchs_apoe4 <- chisq.test(MCIclass ,ADtime$APOE4)
+Mchs_gender <- chisq.test(MCIclass ,ADtime$PTGENDER)
+
+
+########### CHARACTERISTIC ###########
+
+data <- ADtime
+
+Fe <- length(data$PTGENDER[data$PTGENDER==1])
+Ma <- length(data$PTGENDER[data$PTGENDER==2])
+
+LMCI <- length(data$DX_bl[data$DX_bl==4])
+EMCI <- length(data$DX_bl[data$DX_bl==3])
+
+EMCI_F <- subset(data, DX_bl == 3 &  PTGENDER == 1) 
+EMCI_M <- subset(data, DX_bl == 3 &  PTGENDER == 2) 
+
+LMCI_F <- subset(data, DX_bl == 4 &  PTGENDER == 1) 
+LMCI_M <- subset(data, DX_bl == 4 &  PTGENDER == 2) 
+
+##### AGE #####
+Age_EMCI <- data$AGE[data$DX_bl==3]
+mean.result <- mean(Age_EMCI)
+sd.result = sqrt(var(Age_EMCI)) 
+
+Age_LMCI <- data$AGE[data$DX_bl==4]
+mean.result <- mean(Age_LMCI)
+sd.result = sqrt(var(Age_LMCI)) 
+
+##### MMSE #####
+MMSE_EMCI <- data$MMSE[data$DX_bl==3]
+mean.result <- mean(MMSE_EMCI)
+sd.result = sqrt(var(MMSE_EMCI)) 
+
+MMSE_LMCI <- data$MMSE[data$DX_bl==4]
+mean.result <- mean(MMSE_LMCI)
+sd.result = sqrt(var(MMSE_LMCI)) 
+
+##### ADAS13 #####
+ADAS13_EMCI <- data$ADAS13[data$DX_bl==3]
+mean.result <- mean(ADAS13_EMCI)
+sd.result = sqrt(var(ADAS13_EMCI)) 
+
+ADAS13_LMCI <- data$ADAS13[data$DX_bl==4]
+mean.result <- mean(ADAS13_LMCI)
+sd.result = sqrt(var(ADAS13_LMCI)) 
+
+##### ADAS11 #####
+ADAS11_EMCI <- data$ADAS11[data$DX_bl==3]
+mean.result <- mean(ADAS11_EMCI)
+sd.result = sqrt(var(ADAS11_EMCI)) 
+
+ADAS11_LMCI <- data$ADAS11[data$DX_bl==4]
+mean.result <- mean(ADAS11_LMCI)
+sd.result = sqrt(var(ADAS11_LMCI)) 
+
+##### CDRSB #####
+CDRSB_EMCI <- data$CDRSB[data$DX_bl==3]
+mean.result <- mean(CDRSB_EMCI)
+sd.result = sqrt(var(CDRSB_EMCI)) 
+
+CDRSB_LMCI <- data$CDRSB[data$DX_bl==4]
+mean.result <- mean(CDRSB_LMCI)
+sd.result = sqrt(var(CDRSB_LMCI)) 
+
+##### RAVLT_immediate #####
+RAVLT_immediate_EMCI <- data$RAVLT_immediate[data$DX_bl==3]
+mean.result <- mean(RAVLT_immediate_EMCI)
+sd.result = sqrt(var(RAVLT_immediate_EMCI)) 
+
+RAVLT_immediate_LMCI <- data$RAVLT_immediate[data$DX_bl==4]
+mean.result <- mean(RAVLT_immediate_LMCI)
+sd.result = sqrt(var(RAVLT_immediate_LMCI)) 
+
+##### RAVLT_learning #####
+RAVLT_learning_EMCI <- data$RAVLT_learning[data$DX_bl==3]
+mean.result <- mean(RAVLT_learning_EMCI)
+sd.result = sqrt(var(RAVLT_learning_EMCI)) 
+
+RAVLT_learning_LMCI <- data$RAVLT_learning[data$DX_bl==4]
+mean.result <- mean(RAVLT_learning_LMCI)
+sd.result = sqrt(var(RAVLT_learning_LMCI)) 
+
+##### RAVLT_perc_forgetting #####
+RAVLT_perc_forgetting_EMCI <- data$RAVLT_perc_forgetting[data$DX_bl==3]
+mean.result <- mean(RAVLT_perc_forgetting_EMCI)
+sd.result = sqrt(var(RAVLT_perc_forgetting_EMCI)) 
+
+RAVLT_perc_forgetting_LMCI <- data$RAVLT_perc_forgetting[data$DX_bl==4]
+mean.result <- mean(RAVLT_perc_forgetting_LMCI)
+sd.result = sqrt(var(RAVLT_perc_forgetting_LMCI)) 
+
+##### RAVLT_forgetting #####
+RAVLT_forgetting_EMCI <- data$RAVLT_forgetting[data$DX_bl==3]
+mean.result <- mean(RAVLT_forgetting_EMCI)
+sd.result = sqrt(var(RAVLT_forgetting_EMCI)) 
+
+RAVLT_forgetting_LMCI <- data$RAVLT_forgetting[data$DX_bl==4]
+mean.result <- mean(RAVLT_forgetting_LMCI)
+sd.result = sqrt(var(RAVLT_forgetting_LMCI)) 
+
+##### FAQ #####
+FAQ_EMCI <- data$FAQ[data$DX_bl==3]
+mean.result <- mean(FAQ_EMCI)
+sd.result = sqrt(var(FAQ_EMCI) 
+
+FAQ_LMCI <- data$FAQ[data$DX_bl==4]
+mean.result <- mean(FAQ_LMCI)
+sd.result = sqrt(var(FAQ_LMCI)) 
+
+##### Entorhinal #####
+Entorhinal_EMCI <- data$Entorhinal[data$DX_bl==3]
+mean.result <- mean(Entorhinal_EMCI)
+sd.result = sqrt(var(Entorhinal_EMCI) 
+
+Entorhinal_LMCI <- data$Entorhinal[data$DX_bl==4]
+mean.result <- mean(Entorhinal_LMCI)
+sd.result = sqrt(var(Entorhinal_LMCI)) 
+
+
+##### Hippocampus #####
+Hippocampus_EMCI <- data$Hippocampus[data$DX_bl==3]
+mean.result <- mean(Hippocampus_EMCI)
+sd.result = sqrt(var(Hippocampus_EMCI) 
+
+Hippocampus_LMCI <- data$Hippocampus[data$DX_bl==4]
+mean.result <- mean(Hippocampus_LMCI)
+sd.result = sqrt(var(Hippocampus_LMCI)) 
+
+
+##### MidTemp #####
+MidTemp_EMCI <- data$MidTemp[data$DX_bl==3]
+mean.result <- mean(MidTemp_EMCI)
+sd.result = sqrt(var(MidTemp_EMCI))
+
+MidTemp_LMCI <- data$MidTemp[data$DX_bl==4]
+mean.result <- mean(MidTemp_LMCI)
+sd.result = sqrt(var(MidTemp_LMCI)) 
+
+
+##### Ventricles #####
+Ventricles_EMCI <- data$Ventricles[data$DX_bl==3]
+mean.result <- mean(Ventricles_EMCI)
+sd.result = sqrt(var(Ventricles_EMCI))
+
+Ventricles_LMCI <- data$Ventricles[data$DX_bl==4]
+mean.result <- mean(Ventricles_LMCI)
+sd.result = sqrt(var(Ventricles_LMCI)) 
+
+
+##### ICV #####
+ICV_EMCI <- data$ICV[data$DX_bl==3]
+mean.result <- mean(ICV_EMCI)
+sd.result = sqrt(var(ICV_EMCI))
+
+ICV_LMCI <- data$ICV[data$DX_bl==4]
+mean.result <- mean(ICV_LMCI)
+sd.result = sqrt(var(ICV_LMCI)) 
+
+
+
+##### Education #####
+Education_EMCI <- data$PTEDUCAT[data$DX_bl==3]
+mean.result <- mean(Education_EMCI)
+sd.result = sqrt(var(Education_EMCI))
+
+Education_LMCI <- data$PTEDUCAT[data$DX_bl==4]
+mean.result <- mean(Education_LMCI)
+sd.result = sqrt(var(Education_LMCI)) 
+
+
+APOE1 <- data$APOE4[data$DX_bl==3 & data$APOE4==1]
+APOE2 <- data$APOE4[data$DX_bl==3 & data$APOE4==2]
+APOE0 <- data$APOE4[data$DX_bl==3 & data$APOE4==0]
+
+APOE1 <- data$APOE4[data$DX_bl==4 & data$APOE4==1]
+APOE2 <- data$APOE4[data$DX_bl==4 & data$APOE4==2]
+APOE0 <- data$APOE4[data$DX_bl==4 & data$APOE4==0]
+
+
+stats::t.test(ADtime$PTGENDER,ADtime1$PTGENDER)
+stats::t.test(ADtime[ADtime$class == 1,]$AGE,ADtime1[ADtime1$class == 1,]$AGE)
+stats::t.test(ADtime[ADtime$class == 2,]$AGE,ADtime1[ADtime1$class == 2,]$AGE)
+stats::t.test(ADtime[ADtime$class == 3,]$AGE,ADtime1[ADtime1$class == 3,]$AGE)
+
+stats::t.test(ADtime[ADtime$class == 1,]$time,ADtime1[ADtime1$class == 1,]$time)
+stats::t.test(ADtime[ADtime$class == 2,]$time,ADtime1[ADtime1$class == 2,]$time)
+stats::t.test(ADtime[ADtime$class == 3,]$time,ADtime1[ADtime1$class == 3,]$time)
+
+stats::t.test(ADtime[ADtime$class == 1,]$PTEDUCAT,ADtime1[ADtime1$class == 1,]$PTEDUCAT)
+stats::t.test(ADtime[ADtime$class == 2,]$PTEDUCAT,ADtime1[ADtime1$class == 2,]$PTEDUCAT)
+stats::t.test(ADtime[ADtime$class == 3,]$PTEDUCAT,ADtime1[ADtime1$class == 3,]$PTEDUCAT)
+
+stats::t.test(ADtime[ADtime$class == 3,]$MMSE,ADtime1[ADtime1$class == 3,]$MMSE)
+stats::t.test(ADtime[ADtime$class == 1,]$MMSE,ADtime1[ADtime1$class == 1,]$MMSE)
+stats::t.test(ADtime[ADtime$class == 2,]$MMSE,ADtime1[ADtime1$class == 2,]$MMSE)
+stats::t.test(ADtime$MMSE,ADtime1$MMSE)
+
+
+# class <- as.numeric(ADtime$class)
+# class1 <- as.numeric(ADtime1$class)
+# 
+# aov_cont<- aov(class ~ ADtime$time, class1 ~ ADtime1$time)
+# summary(aov_cont)[[1]][["Pr(>F)"]][[1]]
+
+###########MCI to AD conversion ODDS ratio ####
+data <- subset(ADtime,class== 1)
+
+Ma <- length(data$PTGENDER[data$PTGENDER==2])
+
+data <- subset(ADtime,class== 1)
+
+APOE1 <- subset(data,APOE4==1)
+APOE2 <- subset(data,APOE4==2)
+APOE0 <- subset(data,APOE4==0)
+
+data <- subset(ADtime,class== 1)
+
+mean.result <- mean(data$time)
+sd.result = var(data$time)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 3)
+
+mean.result <- mean(data$AGE)
+sd.result = var(data$AGE)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 1)
+
+mean.result <- mean(data$ICV)
+sd.result = var(data$ICV)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 3)
+
+mean.result <- mean(data$PTEDUCAT)
+sd.result = var(data$PTEDUCAT)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 1)
+
+mean.result <- mean(data$Entorhinal)
+sd.result = var(data$Entorhinal)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 3)
+
+mean.result <- mean(data$Ventricles)
+sd.result = var(data$Ventricles)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 1)
+
+mean.result <- mean(data$MidTemp)
+sd.result = var(data$MidTemp)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 1)
+
+mean.result <- mean(data$Hippocampus)
+sd.result = var(data$Hippocampus)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 3)
+
+mean.result <- mean(data$CDRSB)
+sd.result = var(data$CDRSB)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 1)
+
+mean.result <- mean(data$ADAS11)
+sd.result = var(data$ADAS11)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 3)
+
+mean.result <- mean(data$ADAS13)
+sd.result = var(data$ADAS13)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 1)
+
+mean.result <- mean(data$MMSE)
+sd.result = var(data$MMSE)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 3)
+
+mean.result <- mean(data$RAVLT_immediate)
+sd.result = var(data$RAVLT_immediate)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 1)
+
+mean.result <- mean(data$RAVLT_learning)
+sd.result = var(data$RAVLT_learning)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 3)
+
+mean.result <- mean(data$RAVLT_forgetting)
+sd.result = var(data$RAVLT_forgetting)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 1)
+
+mean.result <- mean(data$RAVLT_perc_forgetting)
+sd.result = var(data$RAVLT_perc_forgetting)
+mean.result
+sd.result
+
+data <- subset(ADtime,class== 3)
+
+mean.result <- mean(data$FAQ)
+sd.result = var(data$FAQ)
+mean.result
+sd.result
+
